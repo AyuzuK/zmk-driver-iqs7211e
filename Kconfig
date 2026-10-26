@@ -15,6 +15,17 @@ config IQS7211E_TAP_EDGE_MARGIN_PERMILLE
       Edge margin used to suppress tap/click detection in scroller mode.
       80 means 8 percent margin from each edge.
 
+config IQS7211E_MOTION_START_THRESHOLD
+    int "Pointer motion start threshold (sensor counts)"
+    range 0 1000
+    default 0
+    help
+      Suppress pointer X/Y reports until the finger has moved this distance
+      (|dx| + |dy|) from the touch start position. Movement up to and
+      including the report that crosses the threshold is discarded.
+      Not applied to scroller mode or two finger scroll.
+      0 disables this feature.
+
 config IQS7211E_SCROLLER_HWHEEL_ZONE_MIN_PERMILLE
     int "HWheel zone start (permille)"
     range 0 1000

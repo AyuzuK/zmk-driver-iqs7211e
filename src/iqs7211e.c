@@ -73,6 +73,7 @@ struct iqs7211e_data {
     bool resolution_valid;
     bool gesture_started_near_edge;
     uint8_t scroller_axis_lock;
+    bool motion_started;
 #if defined(CONFIG_IQS7211E_SCROLLER_INERTIA) && CONFIG_IQS7211E_SCROLLER_INERTIA
     struct k_work_delayable inertia_work;
     int32_t inertia_wheel_velocity_q8;
@@ -150,6 +151,22 @@ static bool iqs7211e_is_hwheel_zone(const struct iqs7211e_data *data, uint16_t y
     }
 
     return (uint32_t)y >= zone_start && (uint32_t)y < zone_end;
+}
+
+static bool iqs7211e_suppress_motion_start(struct iqs7211e_data *data, uint16_t x, uint16_t y) {
+    uint32_t distance;
+
+    if (CONFIG_IQS7211E_MOTION_START_THRESHOLD == 0 || data->motion_started) {
+        return false;
+    }
+
+    distance = abs((int32_t)x - data->tap_start_x) + abs((int32_t)y - data->tap_start_y);
+    if (distance >= CONFIG_IQS7211E_MOTION_START_THRESHOLD) {
+        data->motion_started = true;
+    }
+
+    // Discard movement up to and including the report that crosses the threshold
+    return true;
 }
 
 static int16_t iqs7211e_vertical_scroll_delta(const struct iqs7211e_config *cfg, int16_t y_movement) {
@@ -721,6 +738,7 @@ static void iqs7211e_motion_work_handler(struct k_work *work) {
             data->scroll_was_active = false;
             data->gesture_started_near_edge = iqs7211e_is_near_edge(data, finger_1_x, finger_1_y);
             data->scroller_axis_lock = IQS7211E_SCROLL_AXIS_NONE;
+            data->motion_started = false;
         } else if (data->finger_2_prev_valid) {
             // Transitioning from two finger to one finger - reset position reference
             LOG_DBG("Transition from two finger to one finger - reset position");
@@ -730,6 +748,7 @@ static void iqs7211e_motion_work_handler(struct k_work *work) {
             data->scroll_was_active = false;
             data->gesture_started_near_edge = iqs7211e_is_near_edge(data, finger_1_x, finger_1_y);
             data->scroller_axis_lock = IQS7211E_SCROLL_AXIS_NONE;
+            data->motion_started = false;
             // Reset tap state to allow normal single finger gestures
             data->tap_count = 0;
             data->double_tap_hold = false;
@@ -742,6 +761,8 @@ static void iqs7211e_motion_work_handler(struct k_work *work) {
             if (cfg->scroller_mode) {
                 bool hwheel_zone = iqs7211e_is_hwheel_zone(data, finger_1_y);
                 iqs7211e_process_scroller_motion(data, cfg, hwheel_zone, x, y, current_time);
+            } else if (iqs7211e_suppress_motion_start(data, finger_1_x, finger_1_y)) {
+                // Movement is discarded until the motion start threshold is reached
             } else {
                 LOG_DBG("Movement: x=%4d y=%4d", x, y);
                 input_report_rel(dev, INPUT_REL_X, x, false, K_FOREVER);
@@ -1021,6 +1042,7 @@ static int iqs7211e_init(const struct device *dev) {
     data->resolution_valid = false;
     data->gesture_started_near_edge = false;
     data->scroller_axis_lock = IQS7211E_SCROLL_AXIS_NONE;
+    data->motion_started = false;
 
     if (!iqs7211e_load_resolution_from_init(cfg, data)) {
         LOG_WRN("Failed to parse X/Y resolution from init data, edge tap suppression disabled");
