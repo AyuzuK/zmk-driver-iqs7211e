@@ -51,6 +51,18 @@ properties:
       When present, finger movement is reported as `INPUT_REL_WHEEL`
       instead of pointer X/Y movement. Tap-to-click behavior remains active.
 
+  gesture-mode:
+    type: boolean
+    required: false
+    description: |
+      When present, taps and vertical swipes are reported as gesture signals
+      instead of mouse clicks:
+      INPUT_BTN_5 = single tap, INPUT_BTN_6 = double tap,
+      INPUT_BTN_7 = swipe up, INPUT_BTN_8 = swipe down.
+      Tap-to-click, two finger tap right click and double tap hold are
+      disabled. Pointer movement and two finger scroll are reported as usual.
+      Independent of scroller-mode.
+
   v-invert:
     type: boolean
     required: false

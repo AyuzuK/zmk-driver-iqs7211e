@@ -101,6 +101,7 @@ endif
 - `irq-gpios`: RDY/モーションピンに接続されたGPIO（必須、アクティブロー）
 - `power-gpios`: 電源制御ピンに接続されたGPIO（任意、アクティブハイ）
 - `scroller-mode`: 指移動を `INPUT_REL_WHEEL`, `INPUT_REL_HWHEEL` として送出する（任意）
+- `gesture-mode`: タップとスワイプを、クリックではなくジェスチャーの合図（`INPUT_BTN_5`〜`INPUT_BTN_8`）として送出する（任意）
 - `v-invert`: `scroller-mode` 時の縦スクロール方向を反転する（任意）
 - `h-invert`: `scroller-mode` 時の横スクロール方向を反転する（任意）
 
@@ -145,6 +146,38 @@ CONFIG_IQS7211E_MOTION_START_THRESHOLD=25
 - 2本指から1本指に戻ったときは、その位置を開始位置として取り直します。
 - `scroller-mode` と2本指スクロールには適用しません。
 - 既定値は `0`（無効）です。
+
+### Gesture mode
+
+`gesture-mode` を指定すると、タップとスワイプを次の合図として送出します。
+合図は press の後、一定時間で release します。
+
+| 操作 | 合図 |
+|---|---|
+| 1本指タップ（2タップ待ち時間が過ぎたとき） | `INPUT_BTN_5` |
+| 2タップ（待ち時間内に2回目のタップ） | `INPUT_BTN_6` |
+| 上スワイプ | `INPUT_BTN_7` |
+| 下スワイプ | `INPUT_BTN_8` |
+
+- タップの左クリック（`INPUT_BTN_0`）、2本指タップの右クリック（`INPUT_BTN_1`）、ダブルタップの押しっぱなしは送出しません。
+- カーソル移動と2本指スクロールは、これまでどおり送出します。`scroller-mode` とは独立しています。
+- 1タップの合図は、2タップ待ち時間の分だけ遅れて送出されます。
+- 2回目のタッチがタップで終わらなかった場合（スワイプなど）は、先に1タップの合図を送ってから、次の判定を行います。
+- 途中で2本指になったタッチでは、合図を送りません。
+- スワイプは、指を置いてから離すまでの縦の移動量で判定します（縦の移動量が横より大きいこと）。edge margin はタップにだけ適用し、スワイプには適用しません。
+- 合図はマウスボタンとしては扱われないため、keymap 側で `zmk,input-processor-behaviors` を使って任意の behavior に割り当てます。
+
+```kconfig
+CONFIG_IQS7211E_GESTURE_DOUBLE_TAP_WAIT_MS=300
+CONFIG_IQS7211E_GESTURE_TAP_TIME_MS=200
+CONFIG_IQS7211E_GESTURE_TAP_DISTANCE=50
+CONFIG_IQS7211E_GESTURE_SWIPE_DISTANCE_PERMILLE=200
+CONFIG_IQS7211E_GESTURE_SWIPE_MAX_TIME_MS=500
+CONFIG_IQS7211E_GESTURE_SIGNAL_RELEASE_MS=30
+```
+
+- 上記の値は既定値です。`gesture-mode` を指定したときだけ使われます。
+- `IQS7211E_GESTURE_SWIPE_DISTANCE_PERMILLE`: スワイプと判定する縦の移動量（Y解像度に対する割合）。
 
 ## ハードウェアセットアップ
 

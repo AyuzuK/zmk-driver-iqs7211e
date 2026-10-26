@@ -36,6 +36,12 @@ LOG_MODULE_REGISTER(iqs7211e, CONFIG_ZMK_LOG_LEVEL);
 #define IQS7211E_SCROLL_AXIS_VERTICAL 1
 #define IQS7211E_SCROLL_AXIS_HORIZONTAL 2
 
+// Gesture mode signal codes
+#define IQS7211E_GESTURE_CODE_TAP INPUT_BTN_5
+#define IQS7211E_GESTURE_CODE_DOUBLE_TAP INPUT_BTN_6
+#define IQS7211E_GESTURE_CODE_SWIPE_UP INPUT_BTN_7
+#define IQS7211E_GESTURE_CODE_SWIPE_DOWN INPUT_BTN_8
+
 struct iqs7211e_config {
     struct i2c_dt_spec i2c;
     struct gpio_dt_spec irq_gpio;
@@ -43,6 +49,7 @@ struct iqs7211e_config {
     const uint8_t *init_data;
     size_t init_len;
     bool scroller_mode;
+    bool gesture_mode;
     bool v_invert;
     bool h_invert;
 };
@@ -74,6 +81,12 @@ struct iqs7211e_data {
     bool gesture_started_near_edge;
     uint8_t scroller_axis_lock;
     bool motion_started;
+    // Gesture mode state
+    struct k_work_delayable gesture_tap_work;
+    struct k_work_delayable gesture_release_work;
+    bool gesture_tap_pending;
+    uint16_t gesture_pressed_code; // 0=none
+    bool gesture_multi_touch;
 #if defined(CONFIG_IQS7211E_SCROLLER_INERTIA) && CONFIG_IQS7211E_SCROLLER_INERTIA
     struct k_work_delayable inertia_work;
     int32_t inertia_wheel_velocity_q8;
@@ -662,6 +675,124 @@ static void iqs7211e_click_work_handler(struct k_work *work) {
     data->pending_click_type = 0;
 }
 
+static void iqs7211e_gesture_release(struct iqs7211e_data *data) {
+    if (data->gesture_pressed_code != 0) {
+        input_report_key(data->dev, data->gesture_pressed_code, 0, true, K_FOREVER);
+        data->gesture_pressed_code = 0;
+    }
+}
+
+static void iqs7211e_gesture_send(struct iqs7211e_data *data, uint16_t code) {
+    // Release the previous signal first so that signals never overlap
+    (void)k_work_cancel_delayable(&data->gesture_release_work);
+    iqs7211e_gesture_release(data);
+
+    input_report_key(data->dev, code, 1, true, K_FOREVER);
+    data->gesture_pressed_code = code;
+    (void)k_work_schedule(&data->gesture_release_work,
+                          K_MSEC(CONFIG_IQS7211E_GESTURE_SIGNAL_RELEASE_MS));
+}
+
+static void iqs7211e_gesture_release_work_handler(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    struct iqs7211e_data *data = CONTAINER_OF(dwork, struct iqs7211e_data, gesture_release_work);
+
+    iqs7211e_gesture_release(data);
+}
+
+static void iqs7211e_gesture_tap_work_handler(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    struct iqs7211e_data *data = CONTAINER_OF(dwork, struct iqs7211e_data, gesture_tap_work);
+
+    if (!data->gesture_tap_pending) {
+        return;
+    }
+
+    data->gesture_tap_pending = false;
+    iqs7211e_gesture_send(data, IQS7211E_GESTURE_CODE_TAP);
+}
+
+// Send a pending single tap immediately (keeps the order: tap -> next gesture)
+static void iqs7211e_gesture_flush_pending_tap(struct iqs7211e_data *data) {
+    if (!data->gesture_tap_pending) {
+        return;
+    }
+
+    (void)k_work_cancel_delayable(&data->gesture_tap_work);
+    data->gesture_tap_pending = false;
+    iqs7211e_gesture_send(data, IQS7211E_GESTURE_CODE_TAP);
+}
+
+// Drop a pending single tap and release a pressed signal (used on suspend)
+static void iqs7211e_gesture_cancel(struct iqs7211e_data *data) {
+    (void)k_work_cancel_delayable(&data->gesture_tap_work);
+    data->gesture_tap_pending = false;
+    (void)k_work_cancel_delayable(&data->gesture_release_work);
+    iqs7211e_gesture_release(data);
+}
+
+static void iqs7211e_gesture_touch_start(struct iqs7211e_data *data) {
+    data->gesture_multi_touch = false;
+
+    // Give the second touch until the tap time to finish as a tap.
+    // If it lasts longer, it is not a tap, so the pending single tap is sent then.
+    if (data->gesture_tap_pending) {
+        (void)k_work_reschedule(&data->gesture_tap_work,
+                                K_MSEC(CONFIG_IQS7211E_GESTURE_TAP_TIME_MS));
+    }
+}
+
+static void iqs7211e_gesture_touch_end(struct iqs7211e_data *data, int64_t touch_duration,
+                                       bool tap_allowed) {
+    int32_t dx;
+    int32_t dy;
+    uint32_t tap_distance;
+    uint32_t swipe_distance;
+
+    if (data->finger_2_prev_valid || data->gesture_multi_touch) {
+        // Two finger contact (scroll or two finger tap) sends no gesture signal
+        iqs7211e_gesture_flush_pending_tap(data);
+        return;
+    }
+
+    dx = (int32_t)data->previous_x - data->tap_start_x;
+    dy = (int32_t)data->previous_y - data->tap_start_y;
+    tap_distance = abs(dx) + abs(dy);
+
+    if (tap_allowed && touch_duration < CONFIG_IQS7211E_GESTURE_TAP_TIME_MS &&
+        tap_distance < CONFIG_IQS7211E_GESTURE_TAP_DISTANCE) {
+        if (data->gesture_tap_pending) {
+            (void)k_work_cancel_delayable(&data->gesture_tap_work);
+            data->gesture_tap_pending = false;
+            iqs7211e_gesture_send(data, IQS7211E_GESTURE_CODE_DOUBLE_TAP);
+        } else {
+            data->gesture_tap_pending = true;
+            (void)k_work_reschedule(&data->gesture_tap_work,
+                                    K_MSEC(CONFIG_IQS7211E_GESTURE_DOUBLE_TAP_WAIT_MS));
+        }
+        return;
+    }
+
+    // Not a tap: send a pending single tap first
+    iqs7211e_gesture_flush_pending_tap(data);
+
+    if (!data->resolution_valid || touch_duration > CONFIG_IQS7211E_GESTURE_SWIPE_MAX_TIME_MS) {
+        return;
+    }
+
+    swipe_distance =
+        ((uint32_t)data->y_resolution * CONFIG_IQS7211E_GESTURE_SWIPE_DISTANCE_PERMILLE) / 1000;
+    if (swipe_distance == 0) {
+        swipe_distance = 1;
+    }
+
+    // Edge margin is not applied to swipes
+    if ((uint32_t)abs(dy) >= swipe_distance && abs(dy) > abs(dx)) {
+        iqs7211e_gesture_send(data, (dy < 0) ? IQS7211E_GESTURE_CODE_SWIPE_UP
+                                             : IQS7211E_GESTURE_CODE_SWIPE_DOWN);
+    }
+}
+
 static int iqs7211e_interrupt_configure(const struct device *dev, gpio_flags_t flags) {
     const struct iqs7211e_config *cfg = dev->config;
 
@@ -739,6 +870,9 @@ static void iqs7211e_motion_work_handler(struct k_work *work) {
             data->gesture_started_near_edge = iqs7211e_is_near_edge(data, finger_1_x, finger_1_y);
             data->scroller_axis_lock = IQS7211E_SCROLL_AXIS_NONE;
             data->motion_started = false;
+            if (cfg->gesture_mode) {
+                iqs7211e_gesture_touch_start(data);
+            }
         } else if (data->finger_2_prev_valid) {
             // Transitioning from two finger to one finger - reset position reference
             LOG_DBG("Transition from two finger to one finger - reset position");
@@ -777,6 +911,7 @@ static void iqs7211e_motion_work_handler(struct k_work *work) {
         
     } else if (finger_count == 2) {
         // Two finger handling
+        data->gesture_multi_touch = true;
         uint16_t finger_1_x = AZOTEQ_IQS7211E_COMBINE_H_L_BYTES(base_data.finger_1_x.h, base_data.finger_1_x.l);
         uint16_t finger_1_y = AZOTEQ_IQS7211E_COMBINE_H_L_BYTES(base_data.finger_1_y.h, base_data.finger_1_y.l);
         uint16_t finger_2_x = AZOTEQ_IQS7211E_COMBINE_H_L_BYTES(base_data.finger_2_x.h, base_data.finger_2_x.l);
@@ -846,7 +981,10 @@ static void iqs7211e_motion_work_handler(struct k_work *work) {
 
             tap_allowed = !(data->gesture_started_near_edge || ended_near_edge);
             
-            if (data->finger_2_prev_valid) {
+            if (cfg->gesture_mode) {
+                // Gesture signals instead of clicks; the common reset below still runs
+                iqs7211e_gesture_touch_end(data, touch_duration, tap_allowed);
+            } else if (data->finger_2_prev_valid) {
                 // Two finger tap - right click
                 if (touch_duration < 200) { // Quick tap
                     LOG_DBG("Two finger tap - press");
@@ -910,6 +1048,7 @@ static void iqs7211e_motion_work_handler(struct k_work *work) {
         data->scroll_was_active = false;
         data->gesture_started_near_edge = false;
         data->scroller_axis_lock = IQS7211E_SCROLL_AXIS_NONE;
+        data->gesture_multi_touch = false;
     }
 
     iqs7211e_interrupt_enable(dev);
@@ -1043,6 +1182,9 @@ static int iqs7211e_init(const struct device *dev) {
     data->gesture_started_near_edge = false;
     data->scroller_axis_lock = IQS7211E_SCROLL_AXIS_NONE;
     data->motion_started = false;
+    data->gesture_tap_pending = false;
+    data->gesture_pressed_code = 0;
+    data->gesture_multi_touch = false;
 
     if (!iqs7211e_load_resolution_from_init(cfg, data)) {
         LOG_WRN("Failed to parse X/Y resolution from init data, edge tap suppression disabled");
@@ -1060,6 +1202,8 @@ static int iqs7211e_init(const struct device *dev) {
     
     k_work_init(&data->motion_work, iqs7211e_motion_work_handler);
     k_work_init_delayable(&data->click_work, iqs7211e_click_work_handler);
+    k_work_init_delayable(&data->gesture_tap_work, iqs7211e_gesture_tap_work_handler);
+    k_work_init_delayable(&data->gesture_release_work, iqs7211e_gesture_release_work_handler);
 #if defined(CONFIG_IQS7211E_SCROLLER_INERTIA) && CONFIG_IQS7211E_SCROLLER_INERTIA
     k_work_init_delayable(&data->inertia_work, iqs7211e_inertia_work_handler);
 #endif
@@ -1152,6 +1296,8 @@ static int iqs7211e_pm_action(const struct device *dev, enum pm_device_action ac
     #if defined(CONFIG_IQS7211E_SCROLLER_INERTIA) && CONFIG_IQS7211E_SCROLLER_INERTIA
         iqs7211e_stop_inertia_scroll(data);
     #endif
+
+        iqs7211e_gesture_cancel(data);
         
         data->init_complete = false;
         break;
@@ -1210,6 +1356,7 @@ static int iqs7211e_pm_action(const struct device *dev, enum pm_device_action ac
             (DT_PROP(DT_DRV_INST(n), init_length)),                                               \
             IQS7211E_INIT_DATA_LEN),                                                         \
         .scroller_mode = DT_INST_PROP_OR(n, scroller_mode, false),                                  \
+        .gesture_mode = DT_INST_PROP_OR(n, gesture_mode, false),                                    \
         .v_invert = DT_INST_PROP_OR(n, v_invert, false),                                        \
         .h_invert = DT_INST_PROP_OR(n, h_invert, false),                                        \
     };                                                                                             \

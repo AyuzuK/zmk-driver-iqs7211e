@@ -26,6 +26,55 @@ config IQS7211E_MOTION_START_THRESHOLD
       Not applied to scroller mode or two finger scroll.
       0 disables this feature.
 
+config IQS7211E_GESTURE_DOUBLE_TAP_WAIT_MS
+    int "Gesture mode: double tap wait time (ms)"
+    range 50 2000
+    default 300
+    help
+      Used only with the gesture-mode property. After a tap, the single tap
+      signal is sent when this time passes without a second touch.
+      A second tap starting within this time sends the double tap signal.
+
+config IQS7211E_GESTURE_TAP_TIME_MS
+    int "Gesture mode: maximum tap duration (ms)"
+    range 50 1000
+    default 200
+    help
+      Used only with the gesture-mode property. A touch shorter than this
+      time (with small movement) is treated as a tap.
+
+config IQS7211E_GESTURE_TAP_DISTANCE
+    int "Gesture mode: maximum tap movement (sensor counts)"
+    range 1 1000
+    default 50
+    help
+      Used only with the gesture-mode property. A touch that moved less than
+      this distance (|dx| + |dy|) is treated as a tap.
+
+config IQS7211E_GESTURE_SWIPE_DISTANCE_PERMILLE
+    int "Gesture mode: minimum vertical swipe distance (permille of Y size)"
+    range 1 1000
+    default 200
+    help
+      Used only with the gesture-mode property. A vertical movement of at
+      least this ratio of the Y resolution is treated as a swipe.
+
+config IQS7211E_GESTURE_SWIPE_MAX_TIME_MS
+    int "Gesture mode: maximum swipe duration (ms)"
+    range 50 2000
+    default 500
+    help
+      Used only with the gesture-mode property. A swipe must finish
+      (finger released) within this time.
+
+config IQS7211E_GESTURE_SIGNAL_RELEASE_MS
+    int "Gesture mode: signal press to release time (ms)"
+    range 1 1000
+    default 30
+    help
+      Used only with the gesture-mode property. Time between the press and
+      the release of a gesture signal.
+
 config IQS7211E_SCROLLER_HWHEEL_ZONE_MIN_PERMILLE
     int "HWheel zone start (permille)"
     range 0 1000
