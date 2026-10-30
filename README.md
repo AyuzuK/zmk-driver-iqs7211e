@@ -101,7 +101,7 @@ endif
 - `irq-gpios`: RDY/モーションピンに接続されたGPIO（必須、アクティブロー）
 - `power-gpios`: 電源制御ピンに接続されたGPIO（任意、アクティブハイ）
 - `scroller-mode`: 指移動を `INPUT_REL_WHEEL`, `INPUT_REL_HWHEEL` として送出する（任意）
-- `gesture-mode`: タップとスワイプを、クリックではなくジェスチャーの合図（`INPUT_BTN_5`〜`INPUT_BTN_9`）として送出する（任意）
+- `gesture-mode`: タップとスワイプを、クリックではなくジェスチャーの合図（`INPUT_BTN_5`〜`INPUT_BTN_9`、`INPUT_BTN_MODE`）として送出する（任意）
 - `v-invert`: `scroller-mode` 時の縦スクロール方向を反転する（任意）
 - `h-invert`: `scroller-mode` 時の横スクロール方向を反転する（任意）
 
@@ -159,9 +159,11 @@ CONFIG_IQS7211E_MOTION_START_THRESHOLD=25
 | 上スワイプ | `INPUT_BTN_7` |
 | 下スワイプ | `INPUT_BTN_8` |
 | クリック（1回目のタップを離した瞬間／2タップ待ち時間内の2回目のタッチの間） | `INPUT_BTN_9` |
+| 長押し（1本指で、ほとんど動かさずに長押しの時間が過ぎたとき） | `INPUT_BTN_MODE` |
 
 - クリックの合図（`INPUT_BTN_9`）は、1回目のタップでは離した瞬間に press し、一定時間で release します。2タップ待ち時間内に2回目のタッチが始まると、触れた瞬間に press し、指を離したときに release します（すぐ離せばダブルクリック、動かせばドラッグ）。
 - クリックの合図は、ほかの合図とは別に release します（ほかの合図を送っても release されません）。
+- 長押しの合図（`INPUT_BTN_MODE`）は、指を離すのを待たずに、時間が過ぎた瞬間に送出します。送出したタッチでは、指を離してもタップ・スワイプ・クリックの合図を送りません。2タップ待ち時間内に始まったタッチ（ドラッグ）と、2本指になったタッチでは送出しません。
 - タップの左クリック（`INPUT_BTN_0`）、2本指タップの右クリック（`INPUT_BTN_1`）、ダブルタップの押しっぱなしは送出しません。
 - カーソル移動と2本指スクロールは、これまでどおり送出します。`scroller-mode` とは独立しています。
 - 1タップの合図は、2タップ待ち時間の分だけ遅れて送出されます。
@@ -177,10 +179,14 @@ CONFIG_IQS7211E_GESTURE_TAP_DISTANCE=50
 CONFIG_IQS7211E_GESTURE_SWIPE_DISTANCE_PERMILLE=200
 CONFIG_IQS7211E_GESTURE_SWIPE_MAX_TIME_MS=500
 CONFIG_IQS7211E_GESTURE_SIGNAL_RELEASE_MS=30
+CONFIG_IQS7211E_GESTURE_LONG_PRESS_MS=500
+CONFIG_IQS7211E_GESTURE_LONG_PRESS_DISTANCE=30
 ```
 
 - 上記の値は既定値です。`gesture-mode` を指定したときだけ使われます。
 - `IQS7211E_GESTURE_SWIPE_DISTANCE_PERMILLE`: スワイプと判定する縦の移動量（Y解像度に対する割合）。
+- `IQS7211E_GESTURE_LONG_PRESS_MS`: 長押しの時間。`0` で長押しの合図を送りません。
+- `IQS7211E_GESTURE_LONG_PRESS_DISTANCE`: 長押しの移動許容（`|dx| + |dy|`、センサー座標）。この値以上動いたタッチでは送出しません。
 
 ## ハードウェアセットアップ
 

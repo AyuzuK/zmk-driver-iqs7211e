@@ -67,6 +67,27 @@ config IQS7211E_GESTURE_SWIPE_MAX_TIME_MS
       Used only with the gesture-mode property. A swipe must finish
       (finger released) within this time.
 
+config IQS7211E_GESTURE_LONG_PRESS_MS
+    int "Gesture mode: long press time (ms)"
+    range 0 5000
+    default 500
+    help
+      Used only with the gesture-mode property. A one finger touch that
+      stays within the long press distance for this time sends the long
+      press signal at that moment, without waiting for the release.
+      The touch then sends no tap, swipe or click signal.
+      A touch that starts within the double tap wait is not used.
+      0 disables the long press signal.
+
+config IQS7211E_GESTURE_LONG_PRESS_DISTANCE
+    int "Gesture mode: maximum long press movement (sensor counts)"
+    range 1 1000
+    default 30
+    help
+      Used only with the gesture-mode property. A touch that moved this
+      distance (|dx| + |dy|) or more from the touch start position does
+      not send the long press signal.
+
 config IQS7211E_GESTURE_SIGNAL_RELEASE_MS
     int "Gesture mode: signal press to release time (ms)"
     range 1 1000

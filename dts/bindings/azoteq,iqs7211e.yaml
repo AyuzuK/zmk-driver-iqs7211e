@@ -60,7 +60,8 @@ properties:
       INPUT_BTN_5 = single tap, INPUT_BTN_6 = double tap,
       INPUT_BTN_7 = swipe up, INPUT_BTN_8 = swipe down,
       INPUT_BTN_9 = click (first tap release, or held during a second touch
-      within the double tap wait).
+      within the double tap wait),
+      INPUT_BTN_MODE = long press (one finger kept still).
       Tap-to-click, two finger tap right click and double tap hold are
       disabled. Pointer movement and two finger scroll are reported as usual.
       Independent of scroller-mode.
