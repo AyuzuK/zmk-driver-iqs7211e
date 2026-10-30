@@ -101,7 +101,7 @@ endif
 - `irq-gpios`: RDY/モーションピンに接続されたGPIO（必須、アクティブロー）
 - `power-gpios`: 電源制御ピンに接続されたGPIO（任意、アクティブハイ）
 - `scroller-mode`: 指移動を `INPUT_REL_WHEEL`, `INPUT_REL_HWHEEL` として送出する（任意）
-- `gesture-mode`: タップとスワイプを、クリックではなくジェスチャーの合図（`INPUT_BTN_5`〜`INPUT_BTN_8`）として送出する（任意）
+- `gesture-mode`: タップとスワイプを、クリックではなくジェスチャーの合図（`INPUT_BTN_5`〜`INPUT_BTN_9`）として送出する（任意）
 - `v-invert`: `scroller-mode` 時の縦スクロール方向を反転する（任意）
 - `h-invert`: `scroller-mode` 時の横スクロール方向を反転する（任意）
 
@@ -158,7 +158,10 @@ CONFIG_IQS7211E_MOTION_START_THRESHOLD=25
 | 2タップ（待ち時間内に2回目のタップ） | `INPUT_BTN_6` |
 | 上スワイプ | `INPUT_BTN_7` |
 | 下スワイプ | `INPUT_BTN_8` |
+| クリック（1回目のタップを離した瞬間／2タップ待ち時間内の2回目のタッチの間） | `INPUT_BTN_9` |
 
+- クリックの合図（`INPUT_BTN_9`）は、1回目のタップでは離した瞬間に press し、一定時間で release します。2タップ待ち時間内に2回目のタッチが始まると、触れた瞬間に press し、指を離したときに release します（すぐ離せばダブルクリック、動かせばドラッグ）。
+- クリックの合図は、ほかの合図とは別に release します（ほかの合図を送っても release されません）。
 - タップの左クリック（`INPUT_BTN_0`）、2本指タップの右クリック（`INPUT_BTN_1`）、ダブルタップの押しっぱなしは送出しません。
 - カーソル移動と2本指スクロールは、これまでどおり送出します。`scroller-mode` とは独立しています。
 - 1タップの合図は、2タップ待ち時間の分だけ遅れて送出されます。

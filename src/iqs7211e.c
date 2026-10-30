@@ -41,6 +41,9 @@ LOG_MODULE_REGISTER(iqs7211e, CONFIG_ZMK_LOG_LEVEL);
 #define IQS7211E_GESTURE_CODE_DOUBLE_TAP INPUT_BTN_6
 #define IQS7211E_GESTURE_CODE_SWIPE_UP INPUT_BTN_7
 #define IQS7211E_GESTURE_CODE_SWIPE_DOWN INPUT_BTN_8
+// Click signal: pressed at a first tap release, or held during a second touch (drag)
+// Not INPUT_BTN_0-4, which the input listener treats as mouse buttons when not mapped
+#define IQS7211E_GESTURE_CODE_CLICK INPUT_BTN_9
 
 struct iqs7211e_config {
     struct i2c_dt_spec i2c;
@@ -87,6 +90,9 @@ struct iqs7211e_data {
     bool gesture_tap_pending;
     uint16_t gesture_pressed_code; // 0=none
     bool gesture_multi_touch;
+    struct k_work_delayable gesture_click_release_work;
+    bool gesture_click_pressed;
+    bool gesture_click_drag;
 #if defined(CONFIG_IQS7211E_SCROLLER_INERTIA) && CONFIG_IQS7211E_SCROLLER_INERTIA
     struct k_work_delayable inertia_work;
     int32_t inertia_wheel_velocity_q8;
@@ -700,6 +706,32 @@ static void iqs7211e_gesture_release_work_handler(struct k_work *work) {
     iqs7211e_gesture_release(data);
 }
 
+// The click signal has its own release timer, so other signals never release it
+static void iqs7211e_gesture_click_release(struct iqs7211e_data *data) {
+    (void)k_work_cancel_delayable(&data->gesture_click_release_work);
+    if (data->gesture_click_pressed) {
+        input_report_key(data->dev, IQS7211E_GESTURE_CODE_CLICK, 0, true, K_FOREVER);
+        data->gesture_click_pressed = false;
+    }
+    data->gesture_click_drag = false;
+}
+
+static void iqs7211e_gesture_click_press(struct iqs7211e_data *data) {
+    // Release a click waiting for its release first, so that press and release keep their order
+    iqs7211e_gesture_click_release(data);
+
+    input_report_key(data->dev, IQS7211E_GESTURE_CODE_CLICK, 1, true, K_FOREVER);
+    data->gesture_click_pressed = true;
+}
+
+static void iqs7211e_gesture_click_release_work_handler(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    struct iqs7211e_data *data =
+        CONTAINER_OF(dwork, struct iqs7211e_data, gesture_click_release_work);
+
+    iqs7211e_gesture_click_release(data);
+}
+
 static void iqs7211e_gesture_tap_work_handler(struct k_work *work) {
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
     struct iqs7211e_data *data = CONTAINER_OF(dwork, struct iqs7211e_data, gesture_tap_work);
@@ -729,6 +761,7 @@ static void iqs7211e_gesture_cancel(struct iqs7211e_data *data) {
     data->gesture_tap_pending = false;
     (void)k_work_cancel_delayable(&data->gesture_release_work);
     iqs7211e_gesture_release(data);
+    iqs7211e_gesture_click_release(data);
 }
 
 static void iqs7211e_gesture_touch_start(struct iqs7211e_data *data) {
@@ -739,6 +772,11 @@ static void iqs7211e_gesture_touch_start(struct iqs7211e_data *data) {
     if (data->gesture_tap_pending) {
         (void)k_work_reschedule(&data->gesture_tap_work,
                                 K_MSEC(CONFIG_IQS7211E_GESTURE_TAP_TIME_MS));
+
+        // Second touch within the double tap wait: hold the click until the finger leaves
+        // (a quick release makes a double click, moving makes a drag)
+        iqs7211e_gesture_click_press(data);
+        data->gesture_click_drag = true;
     }
 }
 
@@ -748,6 +786,11 @@ static void iqs7211e_gesture_touch_end(struct iqs7211e_data *data, int64_t touch
     int32_t dy;
     uint32_t tap_distance;
     uint32_t swipe_distance;
+
+    // The click held from the touch start (double click or drag) is released first
+    if (data->gesture_click_drag) {
+        iqs7211e_gesture_click_release(data);
+    }
 
     if (data->finger_2_prev_valid || data->gesture_multi_touch) {
         // Two finger contact (scroll or two finger tap) sends no gesture signal
@@ -769,6 +812,11 @@ static void iqs7211e_gesture_touch_end(struct iqs7211e_data *data, int64_t touch
             data->gesture_tap_pending = true;
             (void)k_work_reschedule(&data->gesture_tap_work,
                                     K_MSEC(CONFIG_IQS7211E_GESTURE_DOUBLE_TAP_WAIT_MS));
+
+            // First tap: click at the release without waiting for the double tap
+            iqs7211e_gesture_click_press(data);
+            (void)k_work_schedule(&data->gesture_click_release_work,
+                                  K_MSEC(CONFIG_IQS7211E_GESTURE_SIGNAL_RELEASE_MS));
         }
         return;
     }
@@ -1185,6 +1233,8 @@ static int iqs7211e_init(const struct device *dev) {
     data->gesture_tap_pending = false;
     data->gesture_pressed_code = 0;
     data->gesture_multi_touch = false;
+    data->gesture_click_pressed = false;
+    data->gesture_click_drag = false;
 
     if (!iqs7211e_load_resolution_from_init(cfg, data)) {
         LOG_WRN("Failed to parse X/Y resolution from init data, edge tap suppression disabled");
@@ -1204,6 +1254,8 @@ static int iqs7211e_init(const struct device *dev) {
     k_work_init_delayable(&data->click_work, iqs7211e_click_work_handler);
     k_work_init_delayable(&data->gesture_tap_work, iqs7211e_gesture_tap_work_handler);
     k_work_init_delayable(&data->gesture_release_work, iqs7211e_gesture_release_work_handler);
+    k_work_init_delayable(&data->gesture_click_release_work,
+                          iqs7211e_gesture_click_release_work_handler);
 #if defined(CONFIG_IQS7211E_SCROLLER_INERTIA) && CONFIG_IQS7211E_SCROLLER_INERTIA
     k_work_init_delayable(&data->inertia_work, iqs7211e_inertia_work_handler);
 #endif
